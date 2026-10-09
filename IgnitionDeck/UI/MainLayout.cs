@@ -3,6 +3,7 @@ using IgnitionDeck.Core;
 using IgnitionDeck.Services;
 using IgnitionDeck.UI.Controls;
 using IgnitionDeck.UI.Modals;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -16,6 +17,7 @@ public sealed class MainLayout : UserControl
     private PeerManager _manager = null!;
     private readonly LayoutModalCoordinatorService _modals = new();
     private readonly SemaphoreSlim _operations = new(1, 1);
+    private readonly DispatcherQueueTimer _servicePollTimer;
     private readonly NavigationView _navigation = new() { PaneDisplayMode = NavigationViewPaneDisplayMode.Left, IsSettingsVisible = false, IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed, OpenPaneLength = 240 };
     private readonly StackPanel _toolbar = new() { Orientation = Orientation.Horizontal, Spacing = 12 };
     private readonly StackPanel _body = new() { Spacing = 16 };
@@ -38,7 +40,11 @@ public sealed class MainLayout : UserControl
     private bool _refreshing;
     private bool _initialized;
     private bool _closed;
+    private bool _polling;
+    private long _operationVersion;
     private IReadOnlyList<ProfileStatus> _profiles = [];
+    private IReadOnlyList<ProfileStatus> _overviewProd = [];
+    private IReadOnlyList<ProfileStatus> _overviewDev = [];
     private IReadOnlyList<ReplicaEntry> _replicas = [];
     private IReadOnlyList<RevisionEntry> _revisions = [];
     private IReadOnlyList<BuildEntry> _builds = [];
@@ -48,6 +54,10 @@ public sealed class MainLayout : UserControl
     public MainLayout(Window window)
     {
         _window = window;
+        _servicePollTimer = DispatcherQueue.CreateTimer();
+        _servicePollTimer.Interval = TimeSpan.FromSeconds(5);
+        _servicePollTimer.IsRepeating = true;
+        _servicePollTimer.Tick += OnServicePollTick;
         _profileTabs.TabItems.Add(new TabViewItem { Header = "Overview", IsClosable = false, Content = _profileOverviewHost });
         var details = new Grid();
         details.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -103,7 +113,12 @@ public sealed class MainLayout : UserControl
         };
     }
 
-    public void Stop() { _closed = true; }
+    public void Stop()
+    {
+        _closed = true;
+        _servicePollTimer.Stop();
+        _servicePollTimer.Tick -= OnServicePollTick;
+    }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
@@ -122,12 +137,60 @@ public sealed class MainLayout : UserControl
             _initialized = true;
             await RefreshAsync(force: true);
         });
+        if (_initialized && !_closed) _servicePollTimer.Start();
+    }
+
+    private async void OnServicePollTick(DispatcherQueueTimer sender, object args)
+    {
+        if (_closed || !_initialized || _polling || _refreshing || _operations.CurrentCount == 0 || _modals.IsShowing
+            || _page is not "Execution Profiles" and not "Replicas") return;
+        var page = _page;
+        var environment = EnvironmentName;
+        var revision = RevisionName;
+        var profileTab = _profileTabs.SelectedIndex;
+        var operationVersion = _operationVersion;
+        bool IsCurrent() => !_closed && !_refreshing && _operations.CurrentCount != 0 && !_modals.IsShowing
+            && _operationVersion == operationVersion && _page == page && EnvironmentName == environment
+            && RevisionName == revision && _profileTabs.SelectedIndex == profileTab;
+
+        _polling = true;
+        try
+        {
+            if (page == "Execution Profiles")
+            {
+                if (profileTab == 0)
+                {
+                    var overview = await Task.Run(() => (Prod: _manager.GetProfiles("Prod"), Dev: _manager.GetProfiles("Dev")));
+                    if (IsCurrent()) UpdateProfileOverview(overview.Prod, overview.Dev, force: false);
+                }
+                else
+                {
+                    var profiles = await Task.Run(() => _manager.GetProfiles(environment));
+                    if (IsCurrent() && !_profiles.SequenceEqual(profiles)) { _profiles = profiles; RenderProfiles(); }
+                }
+            }
+            else
+            {
+                IReadOnlyList<ReplicaEntry> replicas = revision is null ? [] : await Task.Run(() => _manager.GetReplicas(environment, revision));
+                if (IsCurrent() && !_replicas.SequenceEqual(replicas)) { _replicas = replicas; RenderReplicas(); }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (IsCurrent())
+            {
+                var message = "Service status polling failed: " + OperationDiagnostics.Describe(ex);
+                if (_status.Text != message) _status.Text = message;
+            }
+        }
+        finally { _polling = false; }
     }
 
     private async Task ExecuteAsync(Func<Task> action)
     {
         if (_closed || _operations.CurrentCount == 0) return;
         await _operations.WaitAsync();
+        _operationVersion++;
         try
         {
             _navigation.IsEnabled = false;
@@ -206,18 +269,7 @@ public sealed class MainLayout : UserControl
                     if (_profileTabs.SelectedIndex == 0)
                     {
                         var overview = await Task.Run(() => (Prod: _manager.GetProfiles("Prod"), Dev: _manager.GetProfiles("Dev")));
-                        var charts = new Grid();
-                        charts.ColumnDefinitions.Add(new ColumnDefinition());
-                        charts.ColumnDefinitions.Add(new ColumnDefinition());
-                        charts.Children.Add(new ProcessPieChart("Prod", overview.Prod));
-                        var devChart = new ProcessPieChart("Dev", overview.Dev);
-                        Grid.SetColumn(devChart, 1);
-                        charts.Children.Add(devChart);
-                        var panel = new StackPanel { Spacing = 12 };
-                        panel.Children.Add(charts);
-                        panel.Children.Add(new TextBlock { Text = "Running counts live processes, including paused workers. Missing counts services without a live process. Counts are grouped by service; refresh to update the snapshot.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(24, 0, 24, 16) });
-                        _profileOverviewHost.Children.Clear();
-                        _profileOverviewHost.Children.Add(new ScrollViewer { Content = panel, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto });
+                        UpdateProfileOverview(overview.Prod, overview.Dev, force);
                     }
                     else
                     {
@@ -268,6 +320,54 @@ public sealed class MainLayout : UserControl
             }
         }
         finally { _refreshing = false; }
+    }
+
+    private void UpdateProfileOverview(IReadOnlyList<ProfileStatus> prod, IReadOnlyList<ProfileStatus> dev, bool force)
+    {
+        if (!force && _profileOverviewHost.Children.Count > 0 && _overviewProd.SequenceEqual(prod) && _overviewDev.SequenceEqual(dev)) return;
+        _overviewProd = prod;
+        _overviewDev = dev;
+        var charts = new Grid();
+        charts.ColumnDefinitions.Add(new ColumnDefinition());
+        charts.ColumnDefinitions.Add(new ColumnDefinition());
+        charts.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        charts.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
+        charts.Children.Add(CreateProfileOverviewPanel("Prod", prod));
+        var devPanel = CreateProfileOverviewPanel("Dev", dev);
+        Grid.SetColumn(devPanel, 1);
+        charts.Children.Add(devPanel);
+        charts.SizeChanged += (_, args) =>
+        {
+            var stacked = args.NewSize.Width < 616;
+            charts.ColumnDefinitions[1].Width = stacked ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+            charts.RowDefinitions[1].Height = stacked ? GridLength.Auto : new GridLength(0);
+            charts.RowSpacing = stacked ? 24 : 0;
+            Grid.SetColumn(devPanel, stacked ? 0 : 1);
+            Grid.SetRow(devPanel, stacked ? 1 : 0);
+        };
+        var panel = new StackPanel { Spacing = 12 };
+        panel.Children.Add(charts);
+        panel.Children.Add(new TextBlock { Text = "Running counts live processes, including paused workers. Missing counts services without a live process. Counts are grouped by service; checked automatically every 5 seconds.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(24, 0, 24, 16) });
+        _profileOverviewHost.Children.Clear();
+        _profileOverviewHost.Children.Add(new ScrollViewer
+        {
+            Content = panel,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch
+        });
+    }
+
+    private ProcessPieChart CreateProfileOverviewPanel(string environment, IReadOnlyList<ProfileStatus> profiles)
+    {
+        var details = CreateAction("Details", () => ExecuteAsync(async () =>
+        {
+            // Change both selections within one operation to avoid duplicate refreshes.
+            _profileEnvironment.SelectedItem = environment;
+            _profileTabs.SelectedIndex = 1;
+            await RefreshAsync(force: true);
+        }));
+        return new ProcessPieChart(environment, profiles, details);
     }
 
     private PeerTable CreateTable(params PeerTableColumn[] columns)

@@ -13,7 +13,7 @@ namespace IgnitionDeck.UI.Controls;
 
 internal sealed class ProcessPieChart : UserControl
 {
-    public ProcessPieChart(string environment, IReadOnlyList<ProfileStatus> profiles)
+    public ProcessPieChart(string environment, IReadOnlyList<ProfileStatus> profiles, Button? detailsButton = null)
     {
         var services = profiles.GroupBy(profile => profile.Service, StringComparer.OrdinalIgnoreCase).ToList();
         var liveServices = services.Select(group => group.Where(profile => profile.Entry is not null && profile.Status is "Running" or "Paused").ToList()).ToList();
@@ -23,8 +23,19 @@ internal sealed class ProcessPieChart : UserControl
         var green = new SolidColorBrush(Colors.SeaGreen);
         var red = new SolidColorBrush(Colors.IndianRed);
         var gray = new SolidColorBrush(Colors.Gray);
-        var panel = new StackPanel { Spacing = 16, Margin = new Thickness(24), MinWidth = 260 };
-        panel.Children.Add(new TextBlock { Text = environment, FontSize = 24, FontWeight = FontWeights.SemiBold });
+        var panel = new StackPanel { Spacing = 16, Margin = new Thickness(24) };
+        var header = new Grid { ColumnSpacing = 16 };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Children.Add(new TextBlock { Text = environment, FontSize = 24, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        if (detailsButton is not null)
+        {
+            detailsButton.HorizontalAlignment = HorizontalAlignment.Right;
+            detailsButton.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(detailsButton, 1);
+            header.Children.Add(detailsButton);
+        }
+        panel.Children.Add(header);
         var canvas = new Canvas { Width = 240, Height = 240 };
         AutomationProperties.SetName(canvas, $"{environment} processes: {healthy} healthy running, {errors} running with errors, {missing} missing");
         var categories = new (int Count, Brush Color)[] { (healthy, green), (errors, red), (missing, gray) };
@@ -43,7 +54,14 @@ internal sealed class ProcessPieChart : UserControl
                 start += fraction;
             }
         }
-        panel.Children.Add(canvas);
+        panel.Children.Add(new Viewbox
+        {
+            Child = canvas,
+            MaxWidth = 240,
+            Stretch = Stretch.Uniform,
+            StretchDirection = StretchDirection.DownOnly,
+            HorizontalAlignment = HorizontalAlignment.Center
+        });
         panel.Children.Add(Legend($"Healthy running: {healthy}", green));
         panel.Children.Add(Legend($"Running with errors: {errors}", red));
         panel.Children.Add(Legend($"Missing: {missing}", gray));
@@ -53,10 +71,14 @@ internal sealed class ProcessPieChart : UserControl
 
     private static StackPanel Legend(string text, Brush brush)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        var row = new Grid { ColumnSpacing = 10 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.Children.Add(new Ellipse { Width = 14, Height = 14, Fill = brush, VerticalAlignment = VerticalAlignment.Center });
-        row.Children.Add(new TextBlock { Text = text, FontSize = 16 });
-        return row;
+        var label = new TextBlock { Text = text, FontSize = 16, TextWrapping = TextWrapping.Wrap };
+        Grid.SetColumn(label, 1);
+        row.Children.Add(label);
+        return new StackPanel { Children = { row } };
     }
 
     private static void AddSlice(Canvas canvas, double start, double fraction, Brush brush)

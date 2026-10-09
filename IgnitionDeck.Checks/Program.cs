@@ -100,6 +100,7 @@ internal static class Program
         replica = manager.GetReplicas("Dev", revision).Single();
         Check("Running launch and PID", replica.IsLive && replica.Pid is not null && fake.Starts == 1);
         Check("Running XML profile", manager.GetProfiles("Dev").Single().Entry!.State == RunState.Running);
+        RunPollingChecks(manager, fake, revision, configFile, Path.Combine(root, "ExecutionProfile.xml"));
         Check("Unrelated JSON and exact ServiceMap retained", Config(revisionPath)["Unrelated"]!.GetValue<string>() == "retained"
             && Config(revisionPath)["Peer"]!["ServiceMap"]![AppName]!.GetValue<string>() == "TestWorker");
         var intactConfig = File.ReadAllText(configFile);
@@ -321,6 +322,80 @@ internal static class Program
             Check("Task inspection does not throw first-chance missing-file exceptions", missingTaskExceptions == 0);
         }
         finally { AppDomain.CurrentDomain.FirstChanceException -= ObserveException; }
+    }
+
+    private static void RunPollingChecks(PeerManager manager, FakeProcesses fake, string revision, string configFile, string profileFile)
+    {
+        var replicas = manager.GetReplicas("Dev", revision);
+        var profiles = manager.GetProfiles("Dev");
+        var replica = replicas.Single();
+        var pid = replica.Pid!.Value;
+        var replacementPid = pid + 10000;
+        var starts = fake.Starts;
+        var originalConfig = File.ReadAllText(configFile);
+        var originalProfile = File.ReadAllText(profileFile);
+        try
+        {
+            Check("Unchanged replica polls compare equal", replicas.SequenceEqual(manager.GetReplicas("Dev", revision)));
+            Check("Unchanged profile polls compare equal", profiles.SequenceEqual(manager.GetProfiles("Dev")));
+
+            fake.Live.Remove(pid);
+            var exitedReplicas = manager.GetReplicas("Dev", revision);
+            var exitedProfiles = manager.GetProfiles("Dev");
+            Check("Replica poll detects worker exit", !replicas.SequenceEqual(exitedReplicas)
+                && exitedReplicas.Single().Status == "Terminated" && exitedReplicas.Single().Pid == pid);
+            Check("Profile poll detects worker exit", !profiles.SequenceEqual(exitedProfiles)
+                && exitedProfiles.Single(profile => profile.Entry is not null).Status == "Terminated"
+                && exitedProfiles.Any(profile => profile.Status == "Missing"));
+            Check("Repeated exited polls compare equal", exitedReplicas.SequenceEqual(manager.GetReplicas("Dev", revision))
+                && exitedProfiles.SequenceEqual(manager.GetProfiles("Dev")));
+            Check("Exit polling preserves execution intent and PID", File.ReadAllText(configFile) == originalConfig
+                && File.ReadAllText(profileFile) == originalProfile);
+
+            fake.Live[pid] = replica.AppPath;
+            Check("Poll detects worker becoming live again", replicas.SequenceEqual(manager.GetReplicas("Dev", revision))
+                && profiles.SequenceEqual(manager.GetProfiles("Dev")));
+
+            var config = JsonNode.Parse(originalConfig)!.AsObject();
+            var service = config["Peer"]!["Services"]!["TestWorker"]!;
+            service["Pid"] = replacementPid;
+            File.WriteAllText(configFile, config.ToJsonString());
+            var document = XDocument.Parse(originalProfile);
+            var app = document.Root!.Elements("App").Single();
+            app.SetAttributeValue("Pid", replacementPid);
+            document.Save(profileFile);
+            fake.Live.Remove(pid);
+            fake.Live[replacementPid] = replica.AppPath;
+            var replacedReplicas = manager.GetReplicas("Dev", revision);
+            var replacedProfiles = manager.GetProfiles("Dev");
+            Check("Replica poll detects external PID change", !replicas.SequenceEqual(replacedReplicas)
+                && replacedReplicas.Single().Pid == replacementPid && replacedReplicas.Single().IsLive);
+            Check("Profile poll detects external PID change", !profiles.SequenceEqual(replacedProfiles)
+                && replacedProfiles.Single().Pid == replacementPid && replacedProfiles.Single().Status == "Running");
+
+            service["RunState"] = "Paused";
+            File.WriteAllText(configFile, config.ToJsonString());
+            app.SetAttributeValue("RunState", "Paused");
+            document.Save(profileFile);
+            var pausedConfig = File.ReadAllText(configFile);
+            var pausedProfile = File.ReadAllText(profileFile);
+            var pausedReplicas = manager.GetReplicas("Dev", revision);
+            var pausedProfiles = manager.GetProfiles("Dev");
+            Check("Replica poll detects external run state change", !replacedReplicas.SequenceEqual(pausedReplicas)
+                && pausedReplicas.Single().State == RunState.Paused);
+            Check("Profile poll detects external status change", !replacedProfiles.SequenceEqual(pausedProfiles)
+                && pausedProfiles.Single().Status == "Paused");
+            Check("Polling never launches workers", fake.Starts == starts);
+            Check("Polling never writes configuration or profiles", File.ReadAllText(configFile) == pausedConfig
+                && File.ReadAllText(profileFile) == pausedProfile);
+        }
+        finally
+        {
+            File.WriteAllText(configFile, originalConfig);
+            File.WriteAllText(profileFile, originalProfile);
+            fake.Live.Remove(replacementPid);
+            fake.Live[pid] = replica.AppPath;
+        }
     }
 
     private static JsonObject Config(string revision) => JsonNode.Parse(File.ReadAllText(Path.Combine(revision, "Infrastructure", "peersettings.json")))!.AsObject();
