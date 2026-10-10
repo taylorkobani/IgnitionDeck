@@ -6,6 +6,12 @@ IgnitionDeck helps startups and small teams operate growing background workloads
 
 > **Scope:** IgnitionDeck is designed for **single-host worker management**. It provides explicit controls and refreshable status views; it does not currently offer automatic horizontal scaling, distributed multi-host orchestration, or continuous health monitoring.
 
+## App overview
+
+![IgnitionDeck Execution Profiles overview](assets/ignitiondeck-overview.webp)
+
+*Execution Profiles dashboard showing healthy, errored, and missing services across Production and Development environments.*
+
 ## Features
 
 - **Execution profiles:** See services in **Dev** and **Prod**, including revisions, process IDs, running state, missing instances, and error indicators.
