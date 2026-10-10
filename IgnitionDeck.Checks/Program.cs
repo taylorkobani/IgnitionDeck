@@ -32,11 +32,23 @@ internal static class Program
     private static void RunChecks(string sandbox)
     {
         var root = Path.Combine(sandbox, "LaunchPad");
-        var settings = Path.Combine(sandbox, "peersettings.json");
-        File.WriteAllText(settings, JsonSerializer.Serialize(new { Peer = new { LaunchPadRoot = root }, Unrelated = "retained" }));
+        var settings = Path.Combine(sandbox, "settings.json");
+        File.WriteAllText(settings, JsonSerializer.Serialize(new { LaunchPadRoot = root, Unrelated = "retained" }));
         var fake = new FakeProcesses();
         var manager = new PeerManager(settings, fake);
         manager.Initialize();
+        var appSettings = ApplicationSettings.Load(settings);
+        Check("App settings load root and default polling", appSettings.LaunchPadRoot == root && appSettings.PollingIntervalSeconds == 5);
+        appSettings.SavePollingInterval(12);
+        manager.SaveLaunchPadRoot(root);
+        Check("Root save preserves polling", ApplicationSettings.Load(settings).PollingIntervalSeconds == 12);
+        appSettings.SavePollingInterval(9);
+        Check("Polling save preserves root", new PeerManager(settings, fake).LaunchPadRoot == root);
+        Throws<ArgumentOutOfRangeException>("Invalid polling rejected", () => appSettings.SavePollingInterval(0));
+        ApplicationSettings.ValidateRecoveryFile(settings);
+        var missingRootSettings = Path.Combine(sandbox, "missing-root-settings.json");
+        File.WriteAllText(missingRootSettings, "{\"PollingIntervalSeconds\":5}");
+        Throws<InvalidDataException>("Recovery rejects app settings without root", () => ApplicationSettings.ValidateRecoveryFile(missingRootSettings));
         Check("Initial XML contracts", XDocument.Load(Path.Combine(root, "ExecutionProfile.xml")).Root!.Name == "ExecutionProfile"
             && XDocument.Load(Path.Combine(root, "AppRepo.xml")).Root!.Name == "AppRepo");
         Check("Environment aliases", PeerManager.NormalizeEnvironment("Development") == "Dev" && PeerManager.NormalizeEnvironment("Production") == "Prod");
@@ -220,7 +232,7 @@ internal static class Program
     {
         var root = Path.Combine(sandbox, "RecoveryLaunchPad");
         var settings = Path.Combine(sandbox, "recovery-settings.json");
-        File.WriteAllText(settings, JsonSerializer.Serialize(new { Peer = new { LaunchPadRoot = root } }));
+        File.WriteAllText(settings, JsonSerializer.Serialize(new { LaunchPadRoot = root }));
         var fake = new FakeProcesses();
         var manager = new PeerManager(settings, fake);
         manager.Initialize();

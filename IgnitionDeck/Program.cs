@@ -14,7 +14,7 @@ internal static class Program
     {
         try
         {
-            var settings = Path.Combine(AppContext.BaseDirectory, "peersettings.json");
+            var settings = ApplicationSettings.DefaultFilePath;
             var command = string.Empty;
             for (var index = 0; index < args.Length; index++)
             {
@@ -37,7 +37,7 @@ internal static class Program
             // Branch before touching App, Application.Start, ComWrappers, or a dispatcher.
             if (command == "--restore-running")
             {
-                if (!File.Exists(settings)) throw new FileNotFoundException("Recovery requires an existing settings file; refusing to fall back to the default LaunchPad.", settings);
+                ApplicationSettings.ValidateRecoveryFile(settings);
                 var manager = new PeerManager(settings);
                 using var coordination = RecoveryRunner.AcquireCoordination(manager.LaunchPadRoot);
                 return new RecoveryRunner(manager).RunAsync().GetAwaiter().GetResult().ExitCode;

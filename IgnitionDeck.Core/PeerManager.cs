@@ -9,7 +9,7 @@ namespace IgnitionDeck.Core;
 public sealed class PeerManager
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-    private readonly string _settingsPath;
+    private readonly ApplicationSettings _settings;
     private readonly IWorkerProcesses _processes;
     private readonly Dictionary<string, ReplicaEntry> _observed = new(StringComparer.OrdinalIgnoreCase);
     public string LaunchPadRoot { get; private set; }
@@ -20,12 +20,16 @@ public sealed class PeerManager
     private string RepoPath => Path.Combine(LaunchPadRoot, "AppRepo.xml");
 
     public PeerManager(string settingsPath, IWorkerProcesses? processes = null)
+        : this(ApplicationSettings.Load(settingsPath), processes)
     {
-        _settingsPath = Path.GetFullPath(settingsPath);
+    }
+
+    public PeerManager(ApplicationSettings settings, IWorkerProcesses? processes = null)
+    {
+        _settings = settings;
         _processes = processes ?? new WorkerProcesses();
-        var peer = ReadSettings()["Peer"];
-        LaunchPadRoot = Path.GetFullPath(peer?["LaunchPadRoot"]?.GetValue<string>() ?? @"C:\LaunchPad");
-        BootPath = peer?["BootPath"]?.GetValue<string>() ?? string.Empty;
+        LaunchPadRoot = settings.LaunchPadRoot;
+        BootPath = settings.BootPath;
     }
 
     public void Initialize()
@@ -40,35 +44,37 @@ public sealed class PeerManager
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("LaunchPad folder is required.");
         var normalized = Path.GetFullPath(path);
+        if (IsCurrentLaunchPadRoot(normalized))
+        {
+            _settings.SaveLaunchPadRoot(LaunchPadRoot);
+            return;
+        }
         Directory.CreateDirectory(normalized);
         // Do not lose pending shutdown observation when switching roots.
         if (_observed.Values.Any(entry => entry.Pid is int pid && _processes.IsMatch(pid, entry.AppPath, entry.Name)))
             throw new InvalidOperationException("Stop managed workers before switching LaunchPad roots.");
         if (GetRevisions("Dev").Concat(GetRevisions("Prod")).Any(revision => revision.ActiveApps > 0))
             throw new InvalidOperationException("Stop live and draining workers before switching LaunchPad roots.");
-        SaveSetting("LaunchPadRoot", normalized);
+        _settings.SaveLaunchPadRoot(normalized);
         LaunchPadRoot = normalized;
         _observed.Clear();
         Initialize();
     }
 
+    public bool IsCurrentLaunchPadRoot(string path) => string.Equals(
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)),
+        Path.TrimEndingDirectorySeparator(LaunchPadRoot),
+        StringComparison.OrdinalIgnoreCase);
+
     public void SaveBootPath(string path)
     {
         var normalized = Path.GetFullPath(path);
         StartupRegistration.Register(normalized);
-        SaveSetting("BootPath", normalized);
+        _settings.SaveBootPath(normalized);
         BootPath = normalized;
     }
 
-    private JsonObject ReadSettings() => File.Exists(_settingsPath) ? ReadJson(_settingsPath) : new JsonObject();
-    public void EnsureRecoverySettings() => SaveSetting("LaunchPadRoot", LaunchPadRoot);
-    private void SaveSetting(string key, string value)
-    {
-        var root = ReadSettings();
-        if (root["Peer"] is not JsonObject) root["Peer"] = new JsonObject();
-        root["Peer"]![key] = value;
-        SaveJson(_settingsPath, root);
-    }
+    public void EnsureRecoverySettings() => _settings.SaveLaunchPadRoot(LaunchPadRoot);
 
     public IReadOnlyList<BuildEntry> GetBuilds() => Directory.GetDirectories(BuildsRoot)
         .Select(path => new DirectoryInfo(path))

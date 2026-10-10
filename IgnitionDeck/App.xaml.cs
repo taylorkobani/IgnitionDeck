@@ -5,7 +5,7 @@ namespace IgnitionDeck;
 
 public partial class App : Application
 {
-    internal static string SettingsPath { get; set; } = Path.Combine(AppContext.BaseDirectory, "peersettings.json");
+    internal static string SettingsPath { get; set; } = IgnitionDeck.Core.ApplicationSettings.DefaultFilePath;
     private Mutex? _instanceMutex;
     private bool _ownsMutex;
     private Window? _window;

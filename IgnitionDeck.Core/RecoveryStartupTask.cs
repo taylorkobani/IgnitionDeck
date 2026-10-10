@@ -61,6 +61,7 @@ public static class RecoveryStartupTask
     public static void Enable(string executable, string settingsPath)
     {
         if (!File.Exists(executable) || !File.Exists(settingsPath)) throw new FileNotFoundException("Executable and settings must exist before registering recovery.");
+        ApplicationSettings.ValidateRecoveryFile(settingsPath);
         var xml = CreateXml(executable, settingsPath);
         WithFolder(folder =>
         {

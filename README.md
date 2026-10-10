@@ -23,7 +23,7 @@ IgnitionDeck helps startups and small teams operate growing background workloads
 4. **Review execution profiles** for status, process details, and errors; open logs when investigating problems.
 5. **Enable reboot recovery** if workers should resume their persisted Running state when Windows starts.
 
-Management actions are explicit. UI status is refreshed when navigating, changing filters, performing actions, or selecting Refresh; it is **not streamed in real time**. Reboot recovery is a bounded startup operation, not a continuously running supervisor or an application-readiness check.
+Management actions are explicit. Execution Profiles and Replicas poll service status while active at a configurable interval (default: 5 seconds), pausing during operations, refreshes, and modal dialogs. Set the interval in **Settings**; machine-wide app settings are stored separately in `%PROGRAMDATA%\IgnitionDeck\settings.json`, not in worker `peersettings.json`. Execution Profiles has no Refresh button; other pages retain it. UI status also refreshes when navigating, changing filters, or performing actions; it is **not streamed in real time**. Reboot recovery is a bounded startup operation, not a continuously running supervisor or an application-readiness check.
 
 ## Requirements
 
@@ -45,20 +45,19 @@ MSBuild .\IgnitionDeck\IgnitionDeck.csproj /restore /p:Platform=x64
 
 Alternatively, open `IgnitionDeck/IgnitionDeck.csproj` in Visual Studio, select **x64**, and run the app as Administrator.
 
-Set the working data directory in **Settings**. For a sandboxed first launch, create `peersettings.json` containing:
+LaunchPad root and polling are stored in `%PROGRAMDATA%\IgnitionDeck\settings.json`, separately from worker configuration. Set the working data directory in **Settings**. For a sandboxed first launch, create `settings.json` containing:
 
 ```json
 {
-  "Peer": {
-    "LaunchPadRoot": "C:\\Sandbox\\LaunchPad"
-  }
+  "LaunchPadRoot": "C:\\Sandbox\\LaunchPad",
+  "PollingIntervalSeconds": 5
 }
 ```
 
 Then start the built executable from its output directory with an explicit settings path:
 
 ```powershell
-.\IgnitionDeck.exe --settings C:\Sandbox\peersettings.json --no-restore
+.\IgnitionDeck.exe --settings C:\Sandbox\settings.json --no-restore
 ```
 
 `--no-restore` is retained for backward compatibility; desktop startup does not automatically launch workers. The default LaunchPad root without a custom setting is `C:\LaunchPad`. Use a sandbox rather than production data when evaluating the application.

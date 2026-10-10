@@ -15,6 +15,7 @@ public sealed class MainLayout : UserControl
 {
     private readonly Window _window;
     private PeerManager _manager = null!;
+    private ApplicationSettings _applicationSettings = null!;
     private readonly LayoutModalCoordinatorService _modals = new();
     private readonly SemaphoreSlim _operations = new(1, 1);
     private readonly DispatcherQueueTimer _servicePollTimer;
@@ -33,9 +34,7 @@ public sealed class MainLayout : UserControl
     private readonly ComboBox _profileEnvironment = new() { ItemsSource = new[] { "Dev", "Prod" }, SelectedIndex = 0, Width = 130, Header = "Environment", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 12, 0, 12) };
     private readonly ComboBox _revision = new() { Width = 310, Header = "Revision" };
     private readonly TextBox _rootPath = new() { Header = "LaunchPad root", MinWidth = 500 };
-    private string _recoveryStatus = string.Empty;
     private RecoveryTaskState? _recoveryTaskState;
-    private string _recoverySummary = string.Empty;
     private string _page = "Execution Profiles";
     private bool _refreshing;
     private bool _initialized;
@@ -55,7 +54,7 @@ public sealed class MainLayout : UserControl
     {
         _window = window;
         _servicePollTimer = DispatcherQueue.CreateTimer();
-        _servicePollTimer.Interval = TimeSpan.FromSeconds(5);
+        _servicePollTimer.Interval = TimeSpan.FromSeconds(ApplicationSettings.DefaultPollingIntervalSeconds);
         _servicePollTimer.IsRepeating = true;
         _servicePollTimer.Tick += OnServicePollTick;
         _profileTabs.TabItems.Add(new TabViewItem { Header = "Overview", IsClosable = false, Content = _profileOverviewHost });
@@ -132,8 +131,10 @@ public sealed class MainLayout : UserControl
         }
         await ExecuteAsync(async () =>
         {
-            _manager = new PeerManager(App.SettingsPath);
+            _applicationSettings = await Task.Run(() => ApplicationSettings.Load(App.SettingsPath));
+            _manager = new PeerManager(_applicationSettings);
             await Task.Run(_manager.Initialize);
+            _servicePollTimer.Interval = TimeSpan.FromSeconds(_applicationSettings.PollingIntervalSeconds);
             _initialized = true;
             await RefreshAsync(force: true);
         });
@@ -243,7 +244,7 @@ public sealed class MainLayout : UserControl
                 _toolbar.Children.Clear();
                 if (_page is not "Builds" and not "Settings" and not "Execution Profiles") _toolbar.Children.Add(_environment);
                 if (_page == "Replicas") _toolbar.Children.Add(_revision);
-                AddAction(_toolbar, "Refresh", () => ExecuteAsync(() => RefreshAsync(force: true)));
+                if (_page != "Execution Profiles") AddAction(_toolbar, "Refresh", () => ExecuteAsync(() => RefreshAsync(force: true)));
                 if (_page == "Builds") AddAction(_toolbar, "Import build", ImportAsync);
                 if (_page == "Revisions") AddAction(_toolbar, "Flush unused", async () =>
                 {
@@ -305,15 +306,12 @@ public sealed class MainLayout : UserControl
                         {
                             var registration = await Task.Run(() => RecoveryStartupTask.Inspect(Environment.ProcessPath!, App.SettingsPath));
                             _recoveryTaskState = registration.State;
-                            _recoveryStatus = registration.Description;
                         }
                         catch (Exception ex)
                         {
                             _recoveryTaskState = null;
-                            _recoveryStatus = "Cannot inspect startup registration: " + OperationDiagnostics.Describe(ex);
+                            _status.Text = "Cannot inspect startup registration: " + OperationDiagnostics.Describe(ex);
                         }
-                        try { _recoverySummary = await Task.Run(() => RecoveryRunner.ReadSummary(_manager.LaunchPadRoot)); }
-                        catch (Exception ex) { _recoverySummary = "Cannot read recovery status: " + OperationDiagnostics.Describe(ex); }
                         RenderSettings();
                     }
                     break;
@@ -482,30 +480,74 @@ public sealed class MainLayout : UserControl
         AddAction(roots, "Save LaunchPad root", async () =>
         {
             var path = _rootPath.Text;
-            if (await ConfirmAsync("Change LaunchPad", "Switch the managed LaunchPad root? Existing files are not moved. Automatic recovery reads this same settings file at startup."))
+            if (_manager.IsCurrentLaunchPadRoot(path)
+                || await ConfirmAsync("Change LaunchPad", "Switch the managed LaunchPad root? Existing files are not moved. Automatic recovery reads this same settings file at startup."))
                 await ExecuteAsync(() => _manager.SaveLaunchPadRoot(path));
         });
+        var pollingInterval = new NumberBox
+        {
+            Header = "Polling interval (seconds)",
+            Minimum = ApplicationSettings.MinPollingIntervalSeconds,
+            Maximum = ApplicationSettings.MaxPollingIntervalSeconds,
+            Value = _applicationSettings.PollingIntervalSeconds,
+            SmallChange = 1,
+            LargeChange = 5,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+            Width = 260,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        _body.Children.Add(pollingInterval);
+        var savingPollingInterval = false;
+        pollingInterval.ValueChanged += async (_, args) =>
+        {
+            if (savingPollingInterval || args.NewValue == _applicationSettings.PollingIntervalSeconds) return;
+            savingPollingInterval = true;
+            pollingInterval.IsEnabled = false;
+            try
+            {
+                await ExecuteAsync(async () =>
+                {
+                    var seconds = args.NewValue;
+                    if (!double.IsFinite(seconds) || seconds != Math.Truncate(seconds)
+                        || seconds < ApplicationSettings.MinPollingIntervalSeconds || seconds > ApplicationSettings.MaxPollingIntervalSeconds)
+                        throw new ArgumentException("Polling interval must be a whole number from 1 to 3,600 seconds.");
+                    await Task.Run(() => _applicationSettings.SavePollingInterval((int)seconds));
+                    _servicePollTimer.Stop();
+                    _servicePollTimer.Interval = TimeSpan.FromSeconds(_applicationSettings.PollingIntervalSeconds);
+                    if (!_closed) _servicePollTimer.Start();
+                });
+            }
+            finally
+            {
+                pollingInterval.Value = _applicationSettings.PollingIntervalSeconds;
+                pollingInterval.IsEnabled = true;
+                savingPollingInterval = false;
+            }
+        };
         _body.Children.Add(new TextBlock { Text = "Automatic reboot recovery", FontSize = 20, FontWeight = FontWeights.SemiBold });
         var registrationState = _recoveryTaskState switch
         {
             RecoveryTaskState.Enabled => "Enabled",
-            RecoveryTaskState.Disabled => "Disabled",
+            RecoveryTaskState.Disabled or RecoveryTaskState.NeedsRepair => "Disabled",
             RecoveryTaskState.NotRegistered => "Not configured",
-            RecoveryTaskState.NeedsRepair => "Needs repair",
             _ => "Unknown — unable to verify"
         };
         _body.Children.Add(new TextBlock { Text = $"Automatic recovery: {registrationState}", FontSize = 18, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        _body.Children.Add(new TextBlock { Text = _recoveryStatus, TextWrapping = TextWrapping.Wrap });
-        _body.Children.Add(new TextBlock { Text = _recoverySummary, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
         var recovery = Actions(_body);
         AddAction(recovery, "Enable automatic recovery", () => ConfigureRecoveryAsync(enable: true), enabled: _recoveryTaskState is RecoveryTaskState.NotRegistered or RecoveryTaskState.Disabled or RecoveryTaskState.NeedsRepair);
-        AddAction(recovery, "Disable automatic recovery", () => ConfigureRecoveryAsync(enable: false), enabled: _recoveryTaskState is RecoveryTaskState.Enabled or RecoveryTaskState.NeedsRepair);
-        AddAction(recovery, "Open recovery logs", () =>
+        AddAction(recovery, "Disable automatic recovery", () => ConfigureRecoveryAsync(enable: false), enabled: _recoveryTaskState is RecoveryTaskState.Enabled);
+        AddAction(recovery, "Open recovery log", () => ExecuteAsync(async () =>
         {
-            var directory = RecoveryRunner.LogDirectory(_manager.LaunchPadRoot);
-            Directory.CreateDirectory(directory);
-            return OpenFolderAsync(directory);
-        });
+            var report = await Task.Run(() =>
+            {
+                var path = RecoveryRunner.StatusPath(_manager.LaunchPadRoot);
+                if (!File.Exists(path)) throw new FileNotFoundException("No recovery log recorded yet.");
+                return System.Text.Json.JsonSerializer.Deserialize<RecoveryReport>(File.ReadAllText(path))
+                    ?? throw new InvalidDataException("Invalid recovery status.");
+            });
+            if (!File.Exists(report.LogPath)) throw new FileNotFoundException("Recovery log file was not found.", report.LogPath);
+            using var process = Process.Start(new ProcessStartInfo(report.LogPath) { UseShellExecute = true });
+        }));
         var controls = Actions(_body);
         AddAction(controls, "Restore all processes", () => ExecuteAsync(async () => { await RestoreAsync(); await RefreshAsync(force: true); }));
         AddAction(controls, "Force shutdown workers", async () =>
@@ -518,7 +560,6 @@ public sealed class MainLayout : UserControl
                     await RefreshAsync(force: true);
                 });
         });
-        _body.Children.Add(new TextBlock { Text = "Closing IgnitionDeck leaves workers running. Automatic recovery uses this installation's settings file and runs IgnitionDeck without a window or Windows logon. Enable automatic recovery requests Administrator approval for task setup.", TextWrapping = TextWrapping.Wrap });
     }
 
     private async Task RestoreAsync()
