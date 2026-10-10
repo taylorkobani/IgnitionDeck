@@ -1,0 +1,33 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IgnitionDeck", "IgnitionDeck\IgnitionDeck.csproj", "{0C48A9BB-7D61-46DC-93D7-24FB23A77CDA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IgnitionDeck.Core", "IgnitionDeck.Core\IgnitionDeck.Core.csproj", "{B1E96F39-5B65-46EB-B890-628D8C72ED48}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IgnitionDeck.Checks", "IgnitionDeck.Checks\IgnitionDeck.Checks.csproj", "{EC5B31DA-9918-4EB7-ACF7-01AE6989853B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0C48A9BB-7D61-46DC-93D7-24FB23A77CDA}.Debug|x64.ActiveCfg = Debug|x64
+		{0C48A9BB-7D61-46DC-93D7-24FB23A77CDA}.Debug|x64.Build.0 = Debug|x64
+		{0C48A9BB-7D61-46DC-93D7-24FB23A77CDA}.Release|x64.ActiveCfg = Release|x64
+		{0C48A9BB-7D61-46DC-93D7-24FB23A77CDA}.Release|x64.Build.0 = Release|x64
+		{B1E96F39-5B65-46EB-B890-628D8C72ED48}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B1E96F39-5B65-46EB-B890-628D8C72ED48}.Debug|x64.Build.0 = Debug|Any CPU
+		{B1E96F39-5B65-46EB-B890-628D8C72ED48}.Release|x64.ActiveCfg = Release|Any CPU
+		{B1E96F39-5B65-46EB-B890-628D8C72ED48}.Release|x64.Build.0 = Release|Any CPU
+		{EC5B31DA-9918-4EB7-ACF7-01AE6989853B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EC5B31DA-9918-4EB7-ACF7-01AE6989853B}.Debug|x64.Build.0 = Debug|Any CPU
+		{EC5B31DA-9918-4EB7-ACF7-01AE6989853B}.Release|x64.ActiveCfg = Release|Any CPU
+		{EC5B31DA-9918-4EB7-ACF7-01AE6989853B}.Release|x64.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
