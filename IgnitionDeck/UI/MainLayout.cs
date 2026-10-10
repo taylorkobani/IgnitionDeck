@@ -74,7 +74,11 @@ public sealed class MainLayout : UserControl
         foreach (var (name, symbol) in new[] { ("Execution Profiles", Symbol.AllApps), ("Builds", Symbol.Download), ("Revisions", Symbol.Library), ("Replicas", Symbol.Play), ("Settings", Symbol.Setting) })
             _navigation.MenuItems.Add(new NavigationViewItem { Content = name, Tag = name, Icon = new SymbolIcon(symbol) });
         _navigation.PaneHeader = new TextBlock { Text = "IgnitionDeck", FontSize = 22, Margin = new Thickness(16, 24, 16, 16) };
-        var main = new Grid { Padding = new Thickness(24), RowSpacing = 16 };
+        var main = new Grid { Padding = new Thickness(24) };
+        _toolbar.Margin = new Thickness(0, 16, 0, 0);
+        _progress.Margin = new Thickness(0, 16, 0, 0);
+        _contentHost.Margin = new Thickness(0, 16, 0, 0);
+        _status.Margin = new Thickness(0, 16, 0, 0);
         foreach (var height in new[] { GridLength.Auto, GridLength.Auto, GridLength.Auto, new GridLength(1, GridUnitType.Star), GridLength.Auto })
             main.RowDefinitions.Add(new RowDefinition { Height = height });
         main.Children.Add(_heading);
@@ -257,6 +261,7 @@ public sealed class MainLayout : UserControl
                     AddAction(_toolbar, "Launch all", () => BulkStateAsync(RunState.Running));
                     AddAction(_toolbar, "Retire revision", () => BulkStateAsync(RunState.Shutdown));
                 }
+                _toolbar.Visibility = _toolbar.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
             }
             var env = EnvironmentName;
             switch (_page)
@@ -345,7 +350,6 @@ public sealed class MainLayout : UserControl
         };
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(charts);
-        panel.Children.Add(new TextBlock { Text = "Running counts live processes, including paused workers. Missing counts services without a live process. Counts are grouped by service; checked automatically every 5 seconds.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(24, 0, 24, 16) });
         _profileOverviewHost.Children.Clear();
         _profileOverviewHost.Children.Add(new ScrollViewer
         {
